@@ -132,7 +132,7 @@ PDF templates share one data model and differ in layout: Corporate (navy band an
 | pdf 3.13 + printing 5.15 | Documents | Layout is manual. Fonts must be bundled. `printing` can preview and share. It cannot silently print on every device. |
 | share_plus 13 | Android share sheet | The user finishes the share. A PDF and a WhatsApp text are separate actions. |
 | url_launcher | `wa.me` and `tel` | Opens WhatsApp or the dialer. Fails clearly when WhatsApp is not installed. Does not attach the PDF. |
-| flutter_local_notifications 22 + timezone + flutter_timezone | Reminders | Needs notification permission on Android 13+. Exact alarms need `SCHEDULE_EXACT_ALARM`, which the user can deny. INVOXA then schedules an inexact alarm. Delivery is not guaranteed. |
+| flutter_local_notifications 22 + timezone + flutter_timezone | Reminders | Needs core library desugaring (`desugar_jdk_libs` 2.1.4) in the Android app. Needs notification permission on Android 13+. Exact alarms need `SCHEDULE_EXACT_ALARM`, which the user can deny. INVOXA then schedules an inexact alarm. Delivery is not guaranteed. |
 | flutter_secure_storage 11 | PIN hash | Device-only. It is not inside the backup, so a restore asks for a new PIN. |
 | local_auth 3 | Biometrics | Works only when the device has biometrics enrolled. PIN remains the fallback. |
 | cryptography 2.9 | AES-GCM backups | 120,000 PBKDF2 iterations. A lost password cannot be recovered. |
