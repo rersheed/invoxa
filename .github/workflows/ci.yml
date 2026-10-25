@@ -1,0 +1,146 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.8
+          channel: stable
+          cache: true
+      - name: Native tools for database tests
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev cmake ninja-build pkg-config clang
+      - name: Android SDK packages
+        run: |
+          set -euo pipefail
+          if [ -x "${ANDROID_SDK_ROOT:-}/cmdline-tools/latest/bin/sdkmanager" ]; then
+            MANAGER="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+          else
+            MANAGER="$(command -v sdkmanager)"
+          fi
+          yes | "$MANAGER" --licenses >/dev/null || true
+          "$MANAGER" "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358"
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.8
+          channel: stable
+          cache: true
+      - name: Android SDK packages
+        run: |
+          set -euo pipefail
+          if [ -x "${ANDROID_SDK_ROOT:-}/cmdline-tools/latest/bin/sdkmanager" ]; then
+            MANAGER="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+          else
+            MANAGER="$(command -v sdkmanager)"
+          fi
+          yes | "$MANAGER" --licenses >/dev/null || true
+          "$MANAGER" "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358"
+      - name: Prepare the release keystore
+        id: signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYSTORE="$RUNNER_TEMP/invoxa-release.jks"
+          if [ -n "${KEYSTORE_BASE64}" ]; then
+            echo "Signing with the keystore from GitHub Actions secrets."
+            printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$KEYSTORE"
+            STORE_PASS="$KEYSTORE_PASSWORD"
+            KEY_PASS="$KEY_PASSWORD"
+            ALIAS="$KEY_ALIAS"
+            echo "mode=repository-secret" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::KEYSTORE_BASE64 is not set. This APK is signed with a one-off key that is not saved. Later releases will not install over it until the owner adds KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS, and KEY_PASSWORD."
+            STORE_PASS="$(openssl rand -base64 24)"
+            KEY_PASS="$STORE_PASS"
+            ALIAS="invoxa"
+            keytool -genkeypair -v \
+              -keystore "$KEYSTORE" \
+              -storetype PKCS12 \
+              -alias "$ALIAS" \
+              -keyalg RSA -keysize 2048 -validity 3650 \
+              -storepass "$STORE_PASS" -keypass "$KEY_PASS" \
+              -dname "CN=INVOXA, OU=Release, O=INVOXA, L=Lagos, ST=Lagos, C=NG"
+            echo "mode=ephemeral" >> "$GITHUB_OUTPUT"
+          fi
+          umask 077
+          cat > android/key.properties <<EOF
+          storePassword=${STORE_PASS}
+          keyPassword=${KEY_PASS}
+          keyAlias=${ALIAS}
+          storeFile=${KEYSTORE}
+          EOF
+      - run: flutter pub get
+      - run: chmod +x android/gradlew
+      - run: flutter build apk --release
+      - run: flutter build appbundle --release
+      - name: Name the release files
+        run: |
+          cp build/app/outputs/flutter-apk/app-release.apk INVOXA.apk
+          cp build/app/outputs/bundle/release/app-release.aab INVOXA.aab
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            INVOXA.apk
+            INVOXA.aab
+          body: |
+            INVOXA ${{ github.ref_name }} for Android.
+
+            Install INVOXA.apk on a phone (see the sideload steps on the website). INVOXA.aab is the Play Console bundle.
+
+            Signing for this build: ${{ steps.signing.outputs.mode }}.
+            An ephemeral key is generated only when KEYSTORE_BASE64 is missing. Add the keystore secrets before the next release if you want updates to install over this build.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  pages:
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4
